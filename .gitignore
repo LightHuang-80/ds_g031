@@ -1,0 +1,17 @@
+# STM32CubeIDE build folders
+Debug/
+Release/
+
+# 其他常见临时文件
+.settings/
+.metadata/
+RemoteSystemsTempFiles/
+*.o
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+*.launch
+*.su
+*.d
