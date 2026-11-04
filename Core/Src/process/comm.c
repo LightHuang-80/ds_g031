@@ -556,8 +556,8 @@ void COMM_ParsePacket(uint8_t* packet, uint16_t pkt_len)
 		if (id == BROADCAST_ID || id == port_state.servo_id){
 			if (id == BROADCAST_ID){
 				// 需要做delay return time
-				delay_us(port_state.return_delay_time * 2);
-				delay_us(port_state.servo_id * 100);
+				uint32_t wait_us = port_state.servo_id * 150 + port_state.return_delay_time * 2;
+				delay_us(wait_us);
 			}
 
 			dynamixel_ping(&hlpuart1, port_state.servo_id);
