@@ -154,7 +154,8 @@ int main(void)
 	else             LED_process(0);
 
 	ANGLE_Process();
-	Servo_UpdateToTable();
+
+	Servo_MainLoopSync();
   }
   /* USER CODE END 3 */
 }

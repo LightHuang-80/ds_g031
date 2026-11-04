@@ -23,12 +23,14 @@ typedef struct ServoRuntime_ {
 	float    speed;
 	float    current;
 	float    vm_vol;
-	float    pwmset;
+	int32_t  pwmset;
 
 	uint8_t  state;
 	int8_t   cursign;
 	uint8_t  drive_mode;
 	uint8_t  operation_mode;
+
+	int32_t  current_mA;
 	int32_t  home_offset;
 
 	int32_t  min_pos;
@@ -36,6 +38,8 @@ typedef struct ServoRuntime_ {
 
 	uint16_t raw_angle;
 	uint16_t vm_bus_raw;
+
+	int32_t vel_q8;
 }ServoRuntime_t;
 
 #define DYNA_VEL_UNIT 0.0239691227f
@@ -48,6 +52,7 @@ extern volatile ServoRuntime_t servo_rt;
 extern volatile uint8_t current_ready;
 extern volatile float   goal_current;
 
-void Servo_UpdateToTable(void);
+void Servo_MainLoopSync(void);
 
+void Servo_Position_limit_Update();
 #endif /* SRC_MOTOR_SERVO_H_ */

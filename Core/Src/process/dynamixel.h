@@ -129,17 +129,22 @@ Control Table of RAM Area :
 #define REG_INST_ADDR            69
 #define HARDWARE_ERR_ADDR        70
 
-#define MIN_POSITION_LIMIT_ADDR  52
-#define MAX_POSITION_LIMIT_ADDR  48
-
 #define RETURN_DELAY_TIME_ADDR   9
 
 #define CW_ANGLE_LIMIT_ADDR      48
 #define CCW_ANGLE_LIMIT_ADDR     52
 
+#define MAX_POSITION_LIMIT_ADDR  CW_ANGLE_LIMIT_ADDR
+#define MIN_POSITION_LIMIT_ADDR  CCW_ANGLE_LIMIT_ADDR
+
 #define INPUT_VOL_ADDR           144
 
-#define TEMP_LIMIT_ADDR         11
+#define POSITION_MODE            3
+#define VELOCITY_MODE            2
+
+#define OPERATION_MODE_ADDR      11
+#define HOME_OFFSET_ADDR         20
+
 #define MIN_VOLTAGE_LIMIT_ADDR  12
 #define MAX_VOLTAGE_LIMIT_ADDR  13
 #define MAX_TORQUE_ADDR         14

@@ -54,10 +54,10 @@
 /* USER CODE BEGIN 0 */
 void system_reboot(void)
 {
-    // 1. (可�??) 清除或关闭一些关键中断，防止复位过程中触发异常中�?
+    // 1. (可�??) 清除或关闭一些关键中断，防止复位过程中触发异常中�?
     __disable_irq();
 
-    // 2. 调用 CMSIS 核心库函数触发系统复�?
+    // 2. 调用 CMSIS 核心库函数触发系统复�?
     __NVIC_SystemReset();
 
     // 3. 死循环，等待硬件复位发生（正常情况下代码不会执行到这里）
@@ -75,6 +75,7 @@ extern DMA_HandleTypeDef hdma_lpuart1_tx;
 extern UART_HandleTypeDef hlpuart1;
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim2;
+extern I2C_HandleTypeDef hi2c1;
 /* USER CODE BEGIN EV */
 
 /* USER CODE END EV */
@@ -235,32 +236,7 @@ void TIM2_IRQHandler(void)
 void LPUART1_IRQHandler(void)
 {
   /* USER CODE BEGIN LPUART1_IRQn 0 */
-	if ((port_state.bus_state == BUS_WAIT_TC) &&
-	        (__HAL_UART_GET_FLAG(&hlpuart1, UART_FLAG_TC) != RESET) &&
-	        (__HAL_UART_GET_IT_SOURCE(&hlpuart1, UART_IT_TC) != RESET)){
 
-		// 关闭 TC 中断
-		__HAL_UART_DISABLE_IT(
-			&hlpuart1,
-			UART_IT_TC
-		);
-
-		// 清除 TC
-		__HAL_UART_CLEAR_FLAG(
-			&hlpuart1,
-			UART_FLAG_TC
-		);
-
-		/*
-		 * 到这里才说明�?
-		 *
-		 * �?后一�? stop bit
-		 * 已经真正�? TX 引脚出去
-		 */
-
-		port_state.bus_state = BUS_TX_END;
-
-  }
   /* USER CODE END LPUART1_IRQn 0 */
   HAL_UART_IRQHandler(&hlpuart1);
   /* USER CODE BEGIN LPUART1_IRQn 1 */
@@ -269,5 +245,17 @@ void LPUART1_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+void I2C1_IRQHandler(void)
+{
+  /* USER CODE BEGIN I2C1_IRQn 0 */
 
+  /* USER CODE END I2C1_IRQn 0 */
+
+  HAL_I2C_EV_IRQHandler(&hi2c1);   // 事件中断（传输相关）
+  HAL_I2C_ER_IRQHandler(&hi2c1);   // 错误中断
+
+  /* USER CODE BEGIN I2C1_IRQn 1 */
+
+  /* USER CODE END I2C1_IRQn 1 */
+}
 /* USER CODE END 1 */

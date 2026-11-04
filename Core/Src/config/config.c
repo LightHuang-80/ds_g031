@@ -77,7 +77,7 @@ Address	Size	Data Name
  */
 
 volatile uint8_t DXL_RAMTable[256] = {
-		0xC8, 0x05,      // 0	2	Model Number      #12.0
+		0xD0, 0x05,      // 0	2	Model Number      #12.0
 		0, 1, 0, 1, // 2	4	Model Information #custom
 		2, 			// 6	1	Firmware Version  #custom
 		1, 			// 7	1	ID
@@ -101,7 +101,7 @@ volatile uint8_t DXL_RAMTable[256] = {
 
 		0, 0x04, 0, 0, // 44	4	Velocity Limit
 
-		0, 0x10, 0, 0, // 48	4	Max Position Limit  # 4096
+		0xff, 0xf, 0, 0, // 48	4	Max Position Limit  # 4096
 		0, 0, 0, 0,    // 52	4	Min Position Limit  # 0
 		0, 0, 0, 0,
 		1, // 60	1	Startup Configuration

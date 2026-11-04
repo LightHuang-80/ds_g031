@@ -9,6 +9,20 @@
 #include "servo.h"
 #include "motor_control.h"
 
+
+/*   PWM_ARR       是编译期整数常量 (例如 1599)
+ *   PWM_DUTY_MAX  带 f 后缀 (例如 1.0f / 0.95f)
+ *
+ * 输入 duty_q16: Q16 归一化, +-65536 = +-PWM_DUTY_MAX
+ *   (与 current_loop_q.h 里 cur_pi_q_step() 的输出一致)
+ */
+
+/* 满量程 (65536) 对应的 CCR,编译期常量 */
+#define PWM_CCR_FS      ((uint32_t)(PWM_DUTY_MAX * (float)PWM_ARR + 0.5f))
+
+/* 原来的停止阈值 |duty| < 0.0001 折算到 Q16,编译期常量 */
+#define PWM_STOP_Q16    ((uint32_t)(0.0001f / PWM_DUTY_MAX * 65536.0f + 0.5f))
+
 CurrentPI_t current_pi = {
 		0.15f,
 		15.0f,
@@ -17,7 +31,7 @@ CurrentPI_t current_pi = {
         1.4f
 };
 
-static float ipropi_offset = 0.0f;
+float    ipropi_offset = 0.0f;
 uint8_t  ipropi_calibrating = 0;
 float    ipropi_sum;
 uint16_t ipropi_count = 0;
@@ -112,6 +126,7 @@ void Motor_Output_Disable(void)
                           0);
 }
 
+#if 0
 void Motor_SetPWM_Duty(float duty)
 {
     uint32_t ccr;
@@ -187,4 +202,45 @@ void Motor_SetPWM_Duty(float duty)
     		__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, (uint32_t)(PWM_ARR));          // IN2 = 100%
     	}
     }
+}
+#endif
+
+void Motor_SetPWM_Q16(int32_t duty_q16)
+{
+    /* 1. 限幅 */
+    if (duty_q16 >  65536) duty_q16 =  65536;
+    if (duty_q16 < -65536) duty_q16 = -65536;
+
+    uint32_t mag = (duty_q16 < 0) ? (uint32_t)(-duty_q16) : (uint32_t)duty_q16;
+
+    /* 2. 停止 */
+    if (mag < PWM_STOP_Q16) {
+        Motor_Output_Disable();
+        return;
+    }
+
+    /* 3. CCR = 四舍五入(|duty| * ARR)
+     *    mag <= 65536, PWM_CCR_FS <= ~1600 -> 乘积 < 1.1e8, 不会溢出 */
+    uint32_t ccr = (mag * PWM_CCR_FS + 32768u) >> 16;
+    if (ccr > (uint32_t)PWM_ARR) ccr = (uint32_t)PWM_ARR;
+
+    uint32_t full = (uint32_t)PWM_ARR;          /* 常高一侧           */
+    uint32_t inv  = (uint32_t)PWM_ARR - ccr;    /* 反相 PWM 一侧      */
+
+    /*
+     * 4. 方向
+     *    drive_mode = 0: duty>0 -> CH1 常高, CH4 反相 PWM;  duty<0 -> CH1 反相 PWM, CH4 常高
+     *    drive_mode = 1: 两个通道对调
+     *    ch1_hi = (duty>0) XOR (drive_mode!=0)
+     */
+    uint8_t ch1_hi = (duty_q16 > 0) ^ (servo_rt.drive_mode != 0);
+
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, ch1_hi ? full : inv);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, ch1_hi ? inv  : full);
+}
+
+/* 旧接口:别处(位置环/速度环/保护逻辑)还在调用的话保留,内部转到 Q16 */
+void Motor_SetPWM_Duty(float duty)
+{
+    Motor_SetPWM_Q16((int32_t)(duty * (65536.0f / PWM_DUTY_MAX)));
 }

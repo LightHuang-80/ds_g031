@@ -15,6 +15,11 @@ static I2C_HandleTypeDef *as5600_hi2c = &hi2c1;
 static uint16_t angle_fail_cnt;
 static uint8_t  angle_fault;
 
+// 全局变量
+uint8_t as5600_buf[2];
+volatile uint8_t as5600_data_ready = 0;
+volatile uint16_t as5600_angle = 0;
+
 void i2c1_bus_recover(void)
 {
     HAL_I2C_DeInit(&hi2c1);
@@ -37,7 +42,6 @@ void i2c1_bus_recover(void)
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);   delay_us(5);
 
     MX_I2C1_Init();                                           // MspInit 会把引脚配回 AF_OD
-    angle_fault = 0;
 }
 
 uint32_t AS5600_I2C_Xfer(
@@ -80,22 +84,72 @@ uint32_t AS5600_I2C_Xfer(
 void ANGLE_Init()
 {
 	as5600_init(AS5600_I2C_Xfer);
+
+	as5600_angle = 0;
+
+	/* first angle read */
+	uint8_t ret = 0;
+	while (ret < 5){
+		as5600_error_t e = as5600_get_raw_angle((uint16_t*)&as5600_angle);
+		if (e == AS5600_ERROR_SUCCESS) break;
+		ret ++;
+	}
 }
 
 as5600_error_t ANGLE_getRawAngle(uint16_t *raw_angle)
 {
-    as5600_error_t e = as5600_get_raw_angle(raw_angle);
-    if (e == AS5600_ERROR_SUCCESS) {
-        angle_fail_cnt = 0;
-    } else if (++angle_fail_cnt > 5) {      // 连续失败 5 次
-        angle_fault = 1;                    // 需要做I2C总线恢复
+	*raw_angle = as5600_angle;
+
+	if (HAL_I2C_GetState(&hi2c1) == HAL_I2C_STATE_READY){
+		HAL_StatusTypeDef status = HAL_I2C_Mem_Read_IT(&hi2c1, 0x36 << 1, 0x0C, I2C_MEMADD_SIZE_8BIT, as5600_buf, 2);
+	    if (status == HAL_OK){
+	    	angle_fail_cnt = 0;
+	    }else{
+	    	angle_fail_cnt ++;
+	    }
+	}else{
+		if (angle_fail_cnt ++ > 5){
+			angle_fault = 1;
+			angle_fail_cnt = 0;
+		}
+	}
+
+    return 0;
+}
+
+// I2C 完成回调
+void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
+{
+    if (hi2c->Instance == I2C1){
+        as5600_angle = ((as5600_buf[0] << 8) | as5600_buf[1]) & 0x0FFF;
+        as5600_data_ready = 1;
     }
-    return e;
+}
+
+void HAL_I2C_ErrorCallback(I2C_HandleTypeDef *hi2c)
+{
+    if (hi2c->Instance == I2C1)   // 根据你实际用的 I2C
+    {
+       // 1. 先把状态清干净（非常重要）
+        hi2c->State = HAL_I2C_STATE_READY;
+        hi2c->Mode  = HAL_I2C_MODE_NONE;
+        hi2c->ErrorCode = HAL_I2C_ERROR_NONE;
+
+        // 2. 只置标志，不做耗时操作
+        angle_fail_cnt++;
+        if (angle_fail_cnt >= 5)   // 连续出错才真正恢复
+        {
+        	angle_fault = 1;
+        	angle_fail_cnt = 0;
+        }
+    }
 }
 
 void ANGLE_Process()
 {
 	if (angle_fault){
+		angle_fault = 0;
+
 		i2c1_bus_recover();
 	}
 }

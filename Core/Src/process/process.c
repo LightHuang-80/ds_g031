@@ -63,27 +63,36 @@ void Proc_addr_data(uint16_t addr, uint8_t* data_ptr, uint16_t data_len)
 	}break;
 
 	case 48:{
-		int32_t data = ControlTable_ReadInt32(48);
-		servo_rt.max_pos = data;
+		Servo_Position_limit_Update();
 	}break;
 	case 52:{
-		int32_t data = ControlTable_ReadInt32(52);
-		servo_rt.min_pos = data;
+		Servo_Position_limit_Update();
 	}break;
+
 	case 68:{
 		// 1Byte Status Return Level
 		port_state.resp_level = DXL_RAMTable[68];
 	}break;
-	case 76:
-	case 78:
+
+	case 76: // 76	2	Velocity I Gain
+	case 78: // 78	2	Velocity P Gain
+	{
+		Motion_Vel_PI_Update();
+	}break;
 	case 80:
 	case 82:
 	case 84:
+	{
+		Motion_Pos_PID_Update();
+		// Ram update only
+		return;
+	}
 	case 88:
 	case 90:
 	case 108:
 	case 112:{
-		Motion_Refresh();
+		Motion_Profile_Update();
+		return;
 	}break;
 
 	case 116: {

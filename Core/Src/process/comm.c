@@ -44,28 +44,33 @@ static inline uint8_t rx_is_armed(void)
            (hlpuart1.Instance->CR1 & USART_CR1_RE) &&
            (hlpuart1.Instance->CR3 & USART_CR3_DMAR);
 }
-
+static inline uint8_t rx_dma_ready(void)
+{
+    return (hlpuart1.RxState == HAL_UART_STATE_BUSY_RX) &&
+           (hlpuart1.Instance->CR3 & USART_CR3_DMAR);
+}
 /* ================================================================== *
  * =========================Port ISR ================================ *
  * ================================================================== */
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-    if (huart->Instance == LPUART1){
-    	if (port_state.bus_state == BUS_WAIT_TC){
-    		// 开启 UART TC 中断
-            /*
-             * 等待真正的UART发送完成
-             */
-            __HAL_UART_CLEAR_FLAG(
-                &hlpuart1,
-                UART_FLAG_TC
-            );
+    if (huart->Instance != LPUART1) return;
+    if (port_state.bus_state != BUS_WAIT_TC) return;
 
-    		__HAL_UART_ENABLE_IT(
-    		        &hlpuart1,
-    		        UART_IT_TC
-    		);
-    	}
+    if (rx_dma_ready()) {
+        /* 先清残留,再切方向 */
+        __HAL_UART_SEND_REQ(huart, UART_RXDATA_FLUSH_REQUEST);
+        __HAL_UART_CLEAR_FLAG(huart, UART_CLEAR_IDLEF | UART_CLEAR_OREF |
+                                     UART_CLEAR_FEF  | UART_CLEAR_NEF  |
+                                     UART_CLEAR_PEF);
+
+        /* 一次原子操作:关 TE、开 RE */
+        ATOMIC_MODIFY_REG(huart->Instance->CR1, USART_CR1_TE, USART_CR1_RE);
+
+        port_state.bus_state = BUS_RX;
+    } else {
+        /* DMA 没挂着,交给主循环 COMM_Process -> COMM_rx 完整恢复 */
+        port_state.bus_state = BUS_TX_END;
     }
 }
 
@@ -552,6 +557,7 @@ void COMM_ParsePacket(uint8_t* packet, uint16_t pkt_len)
 			if (id == BROADCAST_ID){
 				// 需要做delay return time
 				delay_us(port_state.return_delay_time * 2);
+				delay_us(port_state.servo_id * 100);
 			}
 
 			dynamixel_ping(&hlpuart1, port_state.servo_id);
