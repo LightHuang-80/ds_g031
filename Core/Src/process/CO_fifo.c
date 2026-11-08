@@ -146,44 +146,72 @@ size_t CO_fifo_write(CO_fifo_t *fifo,
                      size_t count,
                      uint16_t *crc)
 {
-    size_t i;
-    char *bufDest;
-
     if (fifo == NULL || buf == NULL) {
         return 0;
     }
 
-    bufDest = &fifo->buf[fifo->writePtr];
-    for (i = count; i > 0; i--) {
-        size_t writePtrNext = fifo->writePtr + 1;
-
-        /* is circular buffer full */
-        if (writePtrNext == fifo->readPtr ||
-            (writePtrNext == fifo->bufSize && fifo->readPtr == 0)) {
-            break;
-        }
-
-        *bufDest = *buf;
-
 #if CO_CONFIG_FIFO_CRC16_CCITT > 0
-        if (crc != NULL) {
+    if (crc != NULL) {
+        /* ---- 原来的逐字节实现, 仅在需要 CRC 时使用 ---- */
+        size_t i;
+        char *bufDest = &fifo->buf[fifo->writePtr];
+        for (i = count; i > 0; i--) {
+            size_t writePtrNext = fifo->writePtr + 1;
+            if (writePtrNext == fifo->readPtr ||
+                (writePtrNext == fifo->bufSize && fifo->readPtr == 0)) {
+                break;
+            }
+            *bufDest = *buf;
             CO_fifo_crc16_ccitt(crc, *buf);
+            if (writePtrNext == fifo->bufSize) {
+                fifo->writePtr = 0;
+                bufDest = &fifo->buf[0];
+            } else {
+                fifo->writePtr++;
+                bufDest++;
+            }
+            buf++;
         }
+        return count - i;
+    }
+#else
+    (void)crc;
 #endif
 
-        /* increment variables */
-        if (writePtrNext == fifo->bufSize) {
-            fifo->writePtr = 0;
-            bufDest = &fifo->buf[0];
-        }
-        else {
-            fifo->writePtr++;
-            bufDest++;
-        }
-        buf++;
+    size_t wp   = fifo->writePtr;
+    size_t rp   = fifo->readPtr;
+    size_t size = fifo->bufSize;
+
+    /* 已占用 / 剩余空间 (容量 = size - 1) */
+    size_t used  = (wp >= rp) ? (wp - rp) : (size - rp + wp);
+    size_t space = size - 1U - used;
+    if (count > space) {
+        count = space;
+    }
+    if (count == 0U) {
+        return 0;
     }
 
-    return count - i;
+    /* 先拷到缓冲区末尾, 剩下的从头开始 */
+    size_t first = size - wp;
+    if (first > count) {
+        first = count;
+    }
+    memcpy(&fifo->buf[wp], buf, first);
+    if (count > first) {
+        memcpy(&fifo->buf[0], buf + first, count - first);
+    }
+
+    wp += count;
+    if (wp >= size) {
+        wp -= size;
+    }
+
+    /* 保证数据拷贝完成后才发布 writePtr */
+    __asm volatile ("" ::: "memory");
+    fifo->writePtr = wp;
+
+    return count;
 }
 
 
@@ -301,11 +329,58 @@ void CO_fifo_altFinish(CO_fifo_t *fifo, uint16_t *crc) {
 
 }
 
+#if 1
+size_t CO_fifo_altRead(CO_fifo_t *fifo, char *buf, size_t count)
+{
+    size_t available;
+    size_t read1, read2 = 0;
+
+    /* 计算从 altReadPtr 到 writePtr 之间有多少数据 */
+    if (fifo->writePtr >= fifo->altReadPtr) {
+        available = fifo->writePtr - fifo->altReadPtr;
+    } else {
+        available = fifo->bufSize - fifo->altReadPtr + fifo->writePtr;
+    }
+
+    /* 实际要读的长度 */
+    if (count > available) {
+        count = available;
+    }
+    if (count == 0) {
+        return 0;
+    }
+
+    /* 第一段：从 altReadPtr 到缓冲区末尾 */
+    read1 = fifo->bufSize - fifo->altReadPtr;
+    if (read1 > count) {
+        read1 = count;
+    }
+
+    memcpy(buf, &fifo->buf[fifo->altReadPtr], read1);
+
+    /* 第二段：如果发生回绕，再从缓冲区开头拷贝剩余部分 */
+    if (read1 < count) {
+        read2 = count - read1;
+        memcpy(buf + read1, &fifo->buf[0], read2);
+        fifo->altReadPtr = read2;
+    } else {
+        fifo->altReadPtr += read1;
+        if (fifo->altReadPtr == fifo->bufSize) {
+            fifo->altReadPtr = 0;
+        }
+    }
+
+    return count;
+}
+#endif
+
+#if 0
 size_t CO_fifo_altRead(CO_fifo_t *fifo, char *buf, size_t count) {
     size_t i;
     const char *bufSrc;
 
     bufSrc = &fifo->buf[fifo->altReadPtr];
+
     for (i = count; i > 0; i--) {
         const char c = *bufSrc;
 
@@ -328,6 +403,7 @@ size_t CO_fifo_altRead(CO_fifo_t *fifo, char *buf, size_t count) {
 
     return count - i;
 }
+#endif
 #endif /* CO_CONFIG_FIFO_ALT_READ == 1 */
 
 

@@ -77,7 +77,7 @@ Address	Size	Data Name
  */
 
 volatile uint8_t DXL_RAMTable[256] = {
-		0xD0, 0x05,      // 0	2	Model Number      #12.0
+		0xDA, 0x05,      // 0	2	Model Number      #12.0
 		0, 1, 0, 1, // 2	4	Model Information #custom
 		2, 			// 6	1	Firmware Version  #custom
 		1, 			// 7	1	ID

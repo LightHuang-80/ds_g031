@@ -211,6 +211,8 @@ extern uint16_t   reg_action_addr;
 #define BULK_READ_WAIT         0x11
 #define BULK_READ_RESPOND      0x12
 
+#define PARAMS_MAX_LENGTH       32
+
 typedef struct sync_pkt_data_ {
 	uint8_t  devices_num;
 	uint8_t  devices_chain[31];
@@ -219,7 +221,7 @@ typedef struct sync_pkt_data_ {
 	uint8_t  sync_state;              // sync state: wait or respond
 	uint16_t data_len;				  // data length
 	uint8_t  resp_index;               // device index in chain
-	uint8_t  status_data[20];
+	uint8_t  status_data[PARAMS_MAX_LENGTH];
 }sync_pkt_data_t;
 
 typedef struct reg_pkt_data_ {

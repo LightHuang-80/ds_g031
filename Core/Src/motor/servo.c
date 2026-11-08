@@ -404,8 +404,16 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
     if (++cnt >= 2) {                                              /* 位置环 500 Hz */
         cnt = 0;
-        Position_Update();
+        // 11	1	Operating Mode
+        uint8_t operation_mode = DXL_RAMTable[OPERATION_MODE_ADDR];
+        if (operation_mode == POSITION_MODE){
+        	Position_Update();
+        }
     }
+
+    /* restart read as5600 */
+    ANGLE_StartRead();
+
 #else
     uint16_t raw;
     ANGLE_getRawAngle(&raw);

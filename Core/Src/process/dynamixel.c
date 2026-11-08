@@ -198,9 +198,9 @@ void dynamixel_read(UART_HandleTypeDef *huart, uint8_t* packet, uint16_t packet_
 	len +=  packet[10];
 
 	uint8_t error;
-	uint8_t params[12];
+	uint8_t params[PARAMS_MAX_LENGTH];
 
-	if (addr >= 231 || len > 12){
+	if (addr >= 231 || len > PARAMS_MAX_LENGTH){
 		error = ACCESS_ERROR;
 
 		if (port_state.resp_level >= 1)

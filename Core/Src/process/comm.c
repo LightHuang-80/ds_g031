@@ -21,13 +21,17 @@
 
 #include "main.h"
 
+#ifndef RX_STALE_MS
+#define RX_STALE_MS   10U
+#endif
+
 #define RTX_DMA_BUF_SIZE  384
 uint8_t  uart_dma_rtx[RTX_DMA_BUF_SIZE];
 
 #define RX_BUF_SIZE 512
 uint8_t  dxl_ring_buf[RX_BUF_SIZE];
 
-#define DXL_PKT_MAX_LEN 382
+#define DXL_PKT_MAX_LEN 384
 uint8_t  dxl_packet_buf[DXL_PKT_MAX_LEN];
 
 volatile Port_State_t port_state;
@@ -35,20 +39,120 @@ CO_fifo_t    port_fifo;
 
 uint32_t     tx_start_tick;
 volatile uint8_t  comm_recover_req = 0;   // ISR 置位,主循环清除
-volatile uint32_t comm_err_ore, comm_err_fe, comm_err_ne, comm_err_pe, comm_err_dma;
+
+volatile uint32_t last_rx_tick;
 
 HAL_StatusTypeDef COMM_rx();
+void COMM_PacketHandler(void);
+
 static inline uint8_t rx_is_armed(void)
 {
     return (hlpuart1.RxState == HAL_UART_STATE_BUSY_RX) &&
            (hlpuart1.Instance->CR1 & USART_CR1_RE) &&
            (hlpuart1.Instance->CR3 & USART_CR3_DMAR);
 }
+
 static inline uint8_t rx_dma_ready(void)
 {
     return (hlpuart1.RxState == HAL_UART_STATE_BUSY_RX) &&
            (hlpuart1.Instance->CR3 & USART_CR3_DMAR);
 }
+
+/* ========================================================================= *
+ * ========================= CO circle buffer  ============================= *
+ * ========================================================================= */
+
+/* 当前占用字节数; writePtr 由 ISR 修改, 强制只读一次 */
+static inline size_t ring_occupied(const CO_fifo_t *f)
+{
+    size_t wp = *(volatile const size_t *)&f->writePtr;
+    size_t rp = f->readPtr;
+    return (wp >= rp) ? (wp - rp) : (f->bufSize - rp + wp);
+}
+
+/* 从 readPtr 开始拷贝 n 字节 (调用者保证 n <= occupied), 不移动 readPtr */
+static inline void ring_peek(const CO_fifo_t *f, uint8_t *dst, size_t n)
+{
+    size_t rp    = f->readPtr;
+    size_t first = f->bufSize - rp;
+    if (first > n) first = n;
+    memcpy(dst, &f->buf[rp], first);
+    if (n > first) memcpy(dst + first, &f->buf[0], n - first);
+}
+
+/* 丢弃 n 字节 (调用者保证 n <= occupied) */
+static inline void ring_drop(CO_fifo_t *f, size_t n)
+{
+    size_t rp = f->readPtr + n;
+    if (rp >= f->bufSize) rp -= f->bufSize;
+    f->readPtr = rp;
+}
+
+/* 重新同步: 至少丢 1 字节, 然后丢到下一个 0xFF (可能的包头起点) 之前 */
+static void ring_resync(CO_fifo_t *f)
+{
+    size_t occ  = ring_occupied(f);
+    size_t rp   = f->readPtr;
+    size_t size = f->bufSize;
+    size_t n    = 1;
+
+    for (; n < occ; n++) {
+        size_t idx = rp + n;
+        if (idx >= size) idx -= size;
+        if ((uint8_t)f->buf[idx] == 0xFF) break;
+    }
+    ring_drop(f, n);
+}
+
+/* ======================================================================
+ * ======================  Protocol data handle  ========================
+ * =====================================================================*/
+
+void COMM_RxStaleCheck(void)
+{
+    if (ring_occupied(&port_fifo) == 0U) {
+        return;
+    }
+    if ((HAL_GetTick() - last_rx_tick) <= RX_STALE_MS) {
+        return;
+    }
+    ring_resync(&port_fifo);
+    COMM_PacketHandler();
+}
+
+/*
+ * 当前这个包头对应的"帧长度"(字节数)。规则必须与 verify_dxl_packet() 完全一致:
+ *   - 普通包: LENGTH + 7
+ *   - Fast Sync Read 的状态包 (ID=0xFE, INST=0x55, 且本机在等待前一个设备的数据):
+ *     包头里的 LENGTH 是整个合并包的总长, 但本机此时只会收到"前面所有设备"的部分,
+ *     长度 = 第一个设备 (data_len + 12) + 其余设备各 (data_len + 4)
+ * 返回 0 表示非法 (长度超限 / 状态不对), 调用者当作垃圾处理。
+ * 注意: 依赖 sync_pkt, 这些状态由 COMM_ParsePacket() 在主循环里修改, 与本函数同一上下文。
+ */
+static uint16_t dxl_frame_len(const uint8_t *hdr)
+{
+    uint32_t content_len = (uint32_t)hdr[5] | ((uint32_t)hdr[6] << 8);
+    if (content_len >= DXL_PKT_MAX_LEN) {
+        return 0;                                   /* 与 verify 一致: DATA_RANGE_ERROR */
+    }
+    uint32_t total = content_len + 7U;
+
+    if (hdr[4] == BROADCAST_ID && hdr[7] == STATUS_RETURN &&
+        sync_pkt.sync_type == FAST_SYNC_READ_TYPE &&
+        sync_pkt.sync_state == FAST_SYNC_READ_WAIT) {
+        if (sync_pkt.resp_index < 1) {
+            return 0;
+        }
+        total  = (uint32_t)sync_pkt.data_len + 12U;
+        total += (uint32_t)(sync_pkt.resp_index - 1) * ((uint32_t)sync_pkt.data_len + 4U);
+    }
+
+    if (total > DXL_PKT_MAX_LEN) {
+        return 0;
+    }
+    return (uint16_t)total;
+}
+
 /* ================================================================== *
  * =========================Port ISR ================================ *
  * ================================================================== */
@@ -103,6 +207,9 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 
 	port_state.rx_packet_state = PKT_READY;
 
+	/* 用于计算总线静默时间 */
+	last_rx_tick = HAL_GetTick();
+
 	/*
 	 * 重新启动下一次接收
 	 */
@@ -117,45 +224,12 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 #endif
 }
 
-/*
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
-{
-	if (huart->Instance != LPUART1)
-	    return;
-
-    // 1. 停止所有 DMA 和当前传输
-     HAL_UART_DMAStop(huart);
-
-     // 2. 清除所有可能的错误标志
-     __HAL_UART_CLEAR_FLAG(huart, UART_CLEAR_OREF | UART_CLEAR_FEF | UART_CLEAR_NEF | UART_CLEAR_PEF);
-
-     // 3. 【核心】如果外设依然锁死，通过 RCC 强制硬复位 LPUART 硬件
-     __HAL_RCC_LPUART1_FORCE_RESET();
-     for(volatile int i = 0; i < 200; i++); // 短暂延时确保复位完成
-     __HAL_RCC_LPUART1_RELEASE_RESET();
-
-     // 4. 重新初始化 LPUART 的硬件寄存器
-     // 这里的 MX_LPUART1_UART_Init 是 CubeMX 自动生成的初始化函数
-     extern void MX_LPUART1_UART_Init(void);
-     MX_LPUART1_UART_Init();
-
-	port_state.bus_state = BUS_ERROR_RECOVER;
-}
-*/
-
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance != LPUART1)
         return;
 
     uint32_t err = huart->ErrorCode;
-
-    // 统计,方便判断到底是 ORE 还是 FE/NE 占主导
-    if (err & HAL_UART_ERROR_ORE) comm_err_ore++;
-    if (err & HAL_UART_ERROR_FE)  comm_err_fe++;
-    if (err & HAL_UART_ERROR_NE)  comm_err_ne++;
-    if (err & HAL_UART_ERROR_PE)  comm_err_pe++;
-    if (err & HAL_UART_ERROR_DMA) comm_err_dma++;
 
     // 清错误标志(HAL 一般已清,这里再保险一次)
     __HAL_UART_CLEAR_FLAG(huart, UART_CLEAR_OREF | UART_CLEAR_FEF |
@@ -699,6 +773,7 @@ void COMM_ParsePacket(uint8_t* packet, uint16_t pkt_len)
 	}
 }
 
+#if 0
 void COMM_PacketHandler()
 {
 	uint16_t rx_sz;
@@ -763,6 +838,51 @@ void COMM_PacketHandler()
 		}
 	}
 }
+#endif
+
+
+void COMM_PacketHandler(void)
+{
+    for (;;) {
+        size_t occ = ring_occupied(&port_fifo);
+        if (occ < 10U) {                         /* 最小包长 10 */
+            break;
+        }
+
+        /* 1. 只看包头 8 字节: FF FF FD 00 ID LEN_L LEN_H INST */
+        uint8_t hdr[8];
+        ring_peek(&port_fifo, hdr, sizeof hdr);
+
+        if (hdr[0] != 0xFF || hdr[1] != 0xFF || hdr[2] != 0xFD || hdr[3] != 0x00) {
+            ring_resync(&port_fifo);             /* 包头不对 */
+            continue;
+        }
+
+        uint16_t total = dxl_frame_len(hdr);     /* 与 verify_dxl_packet 同一套规则 */
+        if (total < 10U) {
+            ring_resync(&port_fifo);             /* 长度字段异常, 当作垃圾 */
+            continue;
+        }
+        if (occ < total) {                       /* 包还没收全, 等下一次 IDLE */
+            break;
+        }
+
+        /* 2. 只拷贝这一个包, 然后校验 */
+        ring_peek(&port_fifo, dxl_packet_buf, total);
+
+        uint16_t pkt_len = 0;
+        uint16_t err = verify_dxl_packet(dxl_packet_buf, total, &pkt_len);
+
+        if (err != 0 || pkt_len != total) {
+            ring_resync(&port_fifo);             /* CRC 错误等: 从下一个 0xFF 重新找包头 */
+            continue;
+        }
+
+        /* 3. 好包: 先消费, 再解析 (解析里可能很耗时) */
+        ring_drop(&port_fifo, total);
+        COMM_ParsePacket(dxl_packet_buf, total);
+    }
+}
 
 uint16_t COMM_Process()
 {
@@ -795,5 +915,7 @@ uint16_t COMM_Process()
 		COMM_PacketHandler();
 	}
 
+	/* 总线静默处理 */
+	COMM_RxStaleCheck();
 	return port_state.bus_state;
 }

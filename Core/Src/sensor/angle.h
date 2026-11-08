@@ -13,5 +13,6 @@
 void ANGLE_Init();
 as5600_error_t ANGLE_getRawAngle(uint16_t *raw_angle);
 void ANGLE_Process();
+void ANGLE_StartRead(void);
 
 #endif /* SRC_SENSOR_ANGLE_H_ */
